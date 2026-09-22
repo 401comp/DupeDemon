@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.17.0 — 2026-09-22
+
+- Adding a main folder now lists its immediate child folders as independently
+  controllable scan rows, with a direct-files row for the parent itself.
+- Added **Scan Selected** so a user can scan only the chosen children.
+
+## 1.16.0 — 2026-09-22
+
+- Added a dedicated Apple Photos library safety policy. `.photoslibrary` and
+  migrated library packages are detected automatically, including inside a
+  broader source scan.
+- Photos-managed originals are shown as protected audit items and can never be
+  auto-selected, moved, or trashed; matching external copies remain eligible.
+
 ## 1.15.0 — 2026-09-05
 - **New:** Plugin architecture. Drop a single `.py` file into
   `~/Library/Application Support/DupeDemon/plugins/` that exports a

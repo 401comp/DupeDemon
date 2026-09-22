@@ -40,10 +40,18 @@ Optional drag-and-drop from Finder: `python3 -m pip install tkinterdnd2`
 - **Source / Reference / Off folders** — mark each folder as **Source** (files
   can be deleted), **Reference** (files are protected, never deleted), or
   **Off** (excluded from scans entirely). Double-click a row to cycle.
+- **Apple Photos Library protection** — `.photoslibrary` packages are recognized
+  automatically, including when found inside a broader Pictures scan. Their
+  managed originals are audit-only: they are never auto-selected, moved, or
+  trashed. Matching external copies can still be selected safely.
 - **Drag & drop** — drop folders (or files, whose parent folder is added)
   from Finder onto the folder list. "+ Add Folder…" opens a Finder window
   for this too — select several folders at once with ⌘-click and drag them
   all in (Tk's picker can only choose one folder per dialog)
+- **Child-folder chooser** — adding a main folder such as `~/Pictures` lists
+  its immediate child folders as independent rows. Select the rows you want
+  and use **Scan Selected**, or scan the complete listed set; individual rows
+  can also be made Reference or Off.
 - **Quick Look & Compare** — click any thumbnail for macOS Quick Look
   preview; each group's *Compare* button opens a side-by-side window with
   larger images, metadata, and the keeper highlighted

@@ -45,6 +45,7 @@ except ImportError:
 
 import applog
 from progress_indicator import ProgressIndicator, sequence_frames
+from photos_library import is_photos_library, photo_library_root
 
 HEIC_SUPPORTED = False
 try:
@@ -55,7 +56,7 @@ except ImportError:
     pass
 
 APP_NAME = "Dupe Demon"
-__version__ = "1.15.0"
+__version__ = "1.17.0"
 APP_SUPPORT_DIR = Path.home() / "Library" / "Application Support" / "DupeDemon"
 PREFS_FILE = APP_SUPPORT_DIR / "preferences.json"
 CACHE_FILE = APP_SUPPORT_DIR / "hash_cache.db"
@@ -373,6 +374,7 @@ class FileInfo:
     width: int = 0
     height: int = 0
     is_reference: bool = False   # from a Reference folder (never deleted)
+    photo_library_root: Optional[str] = None  # Photos-managed; never actionable
 
 
 class ScanCancelled(Exception):
@@ -384,24 +386,27 @@ def collect_files(folders, prefs: Preferences, cancel_event=None):
 
     `folders` may be a list of path strings (all treated as Source) or a list
     of dicts {"path": ..., "kind": "source"|"reference"}. Files under a
-    Reference folder are marked is_reference=True and will never be deleted."""
+    Reference folder are marked is_reference=True and will never be deleted.
+    Apple Photos library packages are always protected references, even when a
+    parent folder was added as a Source."""
     exts = {"." + e.lower().lstrip(".") for e in prefs.extensions}
     min_bytes = prefs.min_file_size_kb * 1024
     seen = set()
     files = []
     for entry in folders:
         if isinstance(entry, str):
-            folder, kind = entry, "source"
+            folder, kind, recursive = entry, "source", prefs.include_subfolders
         else:
             folder = entry.get("path", "")
             kind = entry.get("kind", "source")
+            recursive = entry.get("recursive", prefs.include_subfolders)
         if kind == "off":
             continue
         is_ref = (kind == "reference")
         root_path = Path(folder)
         if not root_path.is_dir():
             continue
-        if prefs.include_subfolders:
+        if recursive:
             walker = os.walk(root_path, followlinks=prefs.follow_symlinks)
         else:
             walker = [(str(root_path), [], [p.name for p in root_path.iterdir() if p.is_file()])]
@@ -424,8 +429,11 @@ def collect_files(folders, prefs: Preferences, cancel_event=None):
                     if stat.st_size < min_bytes:
                         continue
                     seen.add(real)
-                    files.append(FileInfo(full, stat.st_size, stat.st_mtime,
-                                          is_reference=is_ref))
+                    library_root = photo_library_root(full)
+                    files.append(FileInfo(
+                        full, stat.st_size, stat.st_mtime,
+                        is_reference=is_ref or library_root is not None,
+                        photo_library_root=library_root))
                 except OSError:
                     continue
     return files
@@ -1528,14 +1536,18 @@ def build_gui():
             sections = [
                 ("Getting started",
                  "Add folders with “+ Add Folder…” or by dragging them "
-                 "onto the folder list from Finder. Click Scan to search for "
-                 "duplicate or similar photos."),
-                ("Source, Reference, and Off",
+                 "onto the folder list from Finder. Dupe Demon lists each "
+                 "immediate child folder separately, so you can choose exactly "
+                 "what to scan. Click Scan to search for duplicate or similar "
+                 "photos."),
+                ("Source, Reference, Photos Library, and Off",
                  "Double-click a folder (or use “Toggle Source / Reference / "
                  "Off”) to change its role. Source folders can have files "
                  "deleted. Reference folders are protected and never deleted — "
-                 "use these for a master photo library. Off folders are skipped "
-                 "entirely during scans."),
+                 "use these for a master photo library. Apple Photos libraries "
+                 "are detected automatically and are always audit-only; Dupe Demon "
+                 "will never mark their originals. Off folders are skipped entirely "
+                 "during scans."),
                 ("Reviewing results",
                  "Each group shows the matching photos with a confidence "
                  "percentage. Click a thumbnail for Quick Look, or use Compare "
@@ -1636,20 +1648,21 @@ def build_gui():
             self._on_drop_leave(event)
             paths = self.tk.splitlist(event.data)  # handles {braced paths with spaces}
             added, added_parents, skipped = [], [], []
+            child_rows = 0
             existing = self._folder_paths_set()
             for raw in paths:
                 p = os.path.abspath(os.path.expanduser(raw))
                 if os.path.isdir(p):
                     if p in existing:
                         continue
-                    self._add_folder_entry(p, "source")
-                    existing.add(p)
+                    child_rows += self._add_folder_with_children(p) - 1
+                    existing = self._folder_paths_set()
                     added.append(p)
                 elif os.path.isfile(p):
                     parent = os.path.dirname(p)
                     if parent and parent not in existing:
-                        self._add_folder_entry(parent, "source")
-                        existing.add(parent)
+                        child_rows += self._add_folder_with_children(parent) - 1
+                        existing = self._folder_paths_set()
                         added_parents.append(parent)
                 else:
                     skipped.append(raw)
@@ -1659,6 +1672,9 @@ def build_gui():
             if added_parents:
                 parts.append(f"Added {len(added_parents)} parent folder"
                              f"{'s' if len(added_parents) != 1 else ''} from dropped files.")
+            if child_rows:
+                parts.append(f"Listed {child_rows} child folder"
+                             f"{'s' if child_rows != 1 else ''} for individual selection.")
             if skipped:
                 parts.append(f"Skipped {len(skipped)} (not found).")
             if not parts:
@@ -1670,12 +1686,14 @@ def build_gui():
         def _folder_paths_set(self):
             return {e["path"] for e in self.folders}
 
-        def _kind_display(self, kind):
+        def _kind_display(self, kind, recursive=True):
+            if kind == "photos_library":
+                return "📷 Photos Library"
             if kind == "reference":
                 return "🔒 Reference"
             if kind == "off":
                 return "⏸ Off"
-            return "Source"
+            return "Source" if recursive else "Source (files here)"
 
         def _update_folder_placeholder(self):
             if self.folders:
@@ -1683,22 +1701,61 @@ def build_gui():
             else:
                 self._folder_placeholder.place(relx=0, rely=0, relwidth=1, relheight=1)
 
-        def _add_folder_entry(self, path, kind="source"):
-            entry = {"path": path, "kind": kind}
+        def _add_folder_entry(self, path, kind="source", recursive=None):
+            # A Photos library is a database-backed package. Its originals
+            # must never be manipulated as loose files.
+            if is_photos_library(path):
+                kind = "photos_library"
+                recursive = True
+            if recursive is None:
+                recursive = self.prefs.include_subfolders
+            entry = {"path": path, "kind": kind, "recursive": recursive}
             self.folders.append(entry)
             self.folder_list.insert(
                 "", "end", iid=path,
-                values=(self._kind_display(kind), path),
-                tags=(kind,) if kind in ("reference", "off") else ())
+                values=(self._kind_display(kind, recursive), path),
+                tags=(kind,) if kind in ("reference", "off", "photos_library") else ())
             self._update_folder_placeholder()
+
+        def _add_folder_with_children(self, path):
+            """Add loose files plus immediate child folders as separate rows.
+
+            This makes Pictures (and similar top-level folders) a useful
+            chooser instead of one opaque recursive source. A parent row scans
+            only files directly in it; each child remains independently
+            selectable, switchable to Reference/Off, or removable.
+            """
+            if path in self._folder_paths_set():
+                return 0
+            if is_photos_library(path):
+                self._add_folder_entry(path, "photos_library", recursive=True)
+                return 1
+            self._add_folder_entry(path, "source", recursive=False)
+            count = 1
+            try:
+                children = sorted(
+                    (child for child in Path(path).iterdir()
+                     if child.is_dir() and not child.name.startswith(".")),
+                    key=lambda child: child.name.lower())
+            except OSError as exc:
+                applog.warning(f"Could not list child folders for {path}: {exc}")
+                return count
+            existing = self._folder_paths_set()
+            for child in children:
+                child_path = str(child)
+                if child_path not in existing:
+                    self._add_folder_entry(child_path, "source")
+                    existing.add(child_path)
+                    count += 1
+            return count
 
         def _refresh_folder_row(self, path):
             for e in self.folders:
                 if e["path"] == path:
                     self.folder_list.item(
                         path,
-                        values=(self._kind_display(e["kind"]), path),
-                        tags=(e["kind"],) if e["kind"] in ("reference", "off") else ())
+                        values=(self._kind_display(e["kind"], e.get("recursive", True)), path),
+                        tags=(e["kind"],) if e["kind"] in ("reference", "off", "photos_library") else ())
                     return
 
         def toggle_folder_kind(self):
@@ -1708,6 +1765,10 @@ def build_gui():
             for path in sel:
                 for e in self.folders:
                     if e["path"] == path:
+                        if e["kind"] == "photos_library":
+                            self.status_label.config(
+                                text="Photos Library is protected: its originals are audit-only.")
+                            break
                         _CYCLE = {"source": "reference", "reference": "off", "off": "source"}
                         e["kind"] = _CYCLE.get(e["kind"], "source")
                         self._refresh_folder_row(path)
@@ -1771,6 +1832,9 @@ def build_gui():
                 side="left", padx=(6, 0))
             self.scan_btn = ttk.Button(toolbar, text="▶ Scan", command=self.start_scan)
             self.scan_btn.pack(side="left", padx=(18, 0))
+            self.scan_selected_btn = ttk.Button(
+                toolbar, text="Scan Selected", command=lambda: self.start_scan(selected_only=True))
+            self.scan_selected_btn.pack(side="left", padx=(6, 0))
             self.stop_btn = ttk.Button(toolbar, text="■ Stop", command=self.stop_scan,
                                        state="disabled")
             self.stop_btn.pack(side="left", padx=(6, 0))
@@ -1814,6 +1878,8 @@ def build_gui():
             self.folder_list.tag_configure(
                 "reference", foreground="#1a5fb4", background="#e8f0fe")
             self.folder_list.tag_configure(
+                "photos_library", foreground="#1a5fb4", background="#e8f0fe")
+            self.folder_list.tag_configure(
                 "off", foreground="#999999")
             fscroll = ttk.Scrollbar(tree_wrap, orient="vertical",
                                     command=self.folder_list.yview)
@@ -1836,7 +1902,7 @@ def build_gui():
                        command=self.toggle_folder_kind).pack(side="left")
             ttk.Label(
                 ftools, foreground="gray",
-                text="Reference = protected (never deleted). Double-click a row to toggle."
+                text="Child folders are individually selectable. Reference and Photos Library are protected."
             ).pack(side="left", padx=(10, 0))
 
             self.split.add(folder_frame, weight=30)
@@ -2053,20 +2119,28 @@ def build_gui():
             applog.info(f"start_scan: {note}")
             return allowed, note
 
-        def start_scan(self):
+        def start_scan(self, selected_only=False):
             if self._scan_thread and self._scan_thread.is_alive():
                 return
-            if not self.folders:
+            requested = self.folders
+            if selected_only:
+                selected_paths = set(self.folder_list.selection())
+                requested = [e for e in self.folders if e["path"] in selected_paths]
+                if not requested:
+                    self.status_label.config(text="Select one or more folder rows first.")
+                    return
+            if not requested:
                 self.status_label.config(text="Add at least one folder to scan.")
                 return
             folders, skip_note = self._filter_consented_folders(
-                [dict(e) for e in self.folders])
+                [dict(e) for e in requested])
             if not folders:
                 self.status_label.config(text=skip_note or "Scan skipped.")
                 return
             self._clear_results()
             self._cancel_event.clear()
             self.scan_btn.state(["disabled"])
+            self.scan_selected_btn.state(["disabled"])
             self.stop_btn.state(["!disabled"])
             self.progress.config(value=0, maximum=100)
             self.status_label.config(text=skip_note or "Starting…")
@@ -2167,6 +2241,7 @@ def build_gui():
 
         def _scan_reset(self, text):
             self.scan_btn.state(["!disabled"])
+            self.scan_selected_btn.state(["!disabled"])
             self.stop_btn.state(["disabled"])
             self.progress.config(value=0)
             self.status_label.config(text=text)
@@ -2181,6 +2256,7 @@ def build_gui():
                       f"{dupe_count} duplicates ({human_size(wasted)} reclaimable)")
             if not groups:
                 self.scan_btn.state(["!disabled"])
+                self.scan_selected_btn.state(["!disabled"])
                 self.stop_btn.state(["disabled"])
                 # a finished scan keeps the pie full/green rather than
                 # resetting to empty, even when nothing was found
@@ -2194,6 +2270,7 @@ def build_gui():
                 self._preselect = compute_auto_selection(groups, self.keep_var.get())
                 status += " — duplicates marked"
             self.scan_btn.state(["!disabled"])
+            self.scan_selected_btn.state(["!disabled"])
             self.stop_btn.state(["disabled"])
             self._start_rendering(groups, status)
 
@@ -2359,6 +2436,7 @@ def build_gui():
                         img_label.bind("<Button-3>",
                                        lambda e, p=fi.path: reveal_in_finder(p))
                     is_ref = getattr(fi, "is_reference", False)
+                    is_photos_item = getattr(fi, "photo_library_root", None) is not None
                     var = tk.BooleanVar(value=(not is_ref) and fi.path in self._preselect)
                     var.trace_add(
                         "write",
@@ -2373,7 +2451,9 @@ def build_gui():
                         cb.state(["disabled"])
                     cb.pack(anchor="w")
                     if is_ref:
-                        ttk.Label(cell, text="Reference — always kept",
+                        ttk.Label(cell,
+                                  text=("Photos Library — always kept"
+                                        if is_photos_item else "Reference — always kept"),
                                   foreground="#1a5fb4").pack(anchor="w")
                     dims = f"{fi.width}×{fi.height} · " if fi.width else ""
                     when = datetime.fromtimestamp(fi.mtime).strftime("%Y-%m-%d")
@@ -2491,6 +2571,7 @@ def build_gui():
 
                 is_keeper = fi.path == keeper.path
                 is_ref = getattr(fi, "is_reference", False)
+                is_photos_item = getattr(fi, "photo_library_root", None) is not None
                 if is_ref:
                     border_color = "#1a5fb4"  # blue for Reference
                 elif is_keeper:
@@ -2528,7 +2609,9 @@ def build_gui():
                 ttk.Label(col, text=name, font=("", 12, "bold"),
                           wraplength=per_w).pack(anchor="w", pady=(8, 0))
                 if is_ref:
-                    ttk.Label(col, text="Reference — always kept",
+                    ttk.Label(col,
+                              text=("Photos Library — always kept"
+                                    if is_photos_item else "Reference — always kept"),
                               foreground="#1a5fb4").pack(anchor="w")
                 elif is_keeper:
                     ttk.Label(col, text="★ Best per current rule — will be kept",
@@ -3073,6 +3156,40 @@ def selftest():
 
         compute_perceptual_hashes = real_phash
         _sha256 = real_sha
+
+        # Apple Photos is a database-backed package, not a normal source
+        # folder. Even if scanned through a parent Source folder, its original
+        # must become a protected reference and only an external copy may mark.
+        library = tmpdir / "Photos Library.photoslibrary" / "originals"
+        library.mkdir(parents=True)
+        library_original = library / "IMG_0001.png"
+        library_original.write_bytes(data)
+        exported_copy = tmpdir / "exported_copy.png"
+        exported_copy.write_bytes(data)
+        library_files = collect_files([str(tmpdir)], prefs)
+        protected = next(f for f in library_files if f.path == str(library_original))
+        external = next(f for f in library_files if f.path == str(exported_copy))
+        assert protected.is_reference and protected.photo_library_root, protected
+        protected_group = Group([protected, external])
+        assert compute_auto_selection([protected_group], "Best quality") == {external.path}
+        print("  Photos Library protection OK — library original always kept")
+
+        # Folder chooser layout: a top-level row contributes only its loose
+        # files while separately listed children are independently scannable.
+        chooser_root = tmpdir / "chooser"
+        chooser_child = chooser_root / "Vacation"
+        chooser_child.mkdir(parents=True)
+        noise_image(31).save(chooser_root / "loose.png")
+        noise_image(32).save(chooser_child / "child.png")
+        chooser_entries = [
+            {"path": str(chooser_root), "kind": "source", "recursive": False},
+            {"path": str(chooser_child), "kind": "source", "recursive": True},
+        ]
+        assert len(collect_files(chooser_entries, prefs)) == 2
+        chooser_entries[1]["kind"] = "off"
+        assert len(collect_files(chooser_entries, prefs)) == 1
+        print("  child-folder chooser OK — children scan independently")
+
         CACHE_FILE = real_cache_file
 
     print("All self-tests passed.")
