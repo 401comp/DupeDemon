@@ -156,3 +156,8 @@ links to an external non-system library. This is a portability check on the
 ## License
 
 [MIT](LICENSE)
+## Support
+
+Found a problem? [Report it on GitHub](https://github.com/401comp/DupeDemon/issues/new?template=bug_report.md).
+Please include the app version and your macOS version, but never include private
+photos or other sensitive files.
