@@ -11,18 +11,12 @@ MACOS_VER=$(sw_vers -productVersion)
 echo "==> macOS $MACOS_VER build"
 
 # Find a usable non-conda Python 3.9+. Prefer python.org framework installer,
-# fall back to Homebrew if present, then PATH. Reject conda (@rpath libs
+# then use a non-conda PATH Python. Reject conda (@rpath libs
 # PyInstaller can't bundle).
 find_python() {
   local cand real
   for v in 3.14 3.13 3.12 3.11 3.10 3.9; do
     cand="/Library/Frameworks/Python.framework/Versions/$v/bin/python$v"
-    [ -x "$cand" ] && echo "$cand" && return 0
-  done
-  for v in 3.14 3.13 3.12 3.11 3.10; do
-    cand="/usr/local/opt/python@$v/bin/python$v"
-    [ -x "$cand" ] && echo "$cand" && return 0
-    cand="/opt/homebrew/opt/python@$v/bin/python$v"
     [ -x "$cand" ] && echo "$cand" && return 0
   done
   if command -v python3 >/dev/null 2>&1; then
@@ -94,12 +88,12 @@ echo "==> verify bundle"
 [ -d "dist/$APP.app" ] || { echo "ERROR: PyInstaller produced no .app"; exit 1; }
 LEAKS=$(find "dist/$APP.app" \( -name '*.so' -o -name '*.dylib' \) -print0 2>/dev/null \
   | xargs -0 otool -L 2>/dev/null \
-  | grep -E '^\s+(/usr/local|/opt/homebrew)' | sort -u || true)
+  | awk '/^[[:space:]]+\// && $1 !~ "^/usr/lib/" && $1 !~ "^/System/Library/" {print $1}' | sort -u || true)
 if [ -n "$LEAKS" ]; then
   echo "WARNING: bundle references paths that a stock Mac won't have:"
   echo "$LEAKS"
 else
-  echo "    bundle OK — no brew/local leaks"
+  echo "    bundle OK — no external non-system links"
 fi
 
 echo "==> DMG"

@@ -133,7 +133,7 @@
 - Pie progress indicator is green instead of blue, and stays full/green
   when a scan finishes (including "no duplicates found") instead of
   resetting to empty
-- README: macOS 10.13+ requirement, Homebrew-not-required clarification
+- README: clarified the self-contained release requirement
 
 ## 1.13.3 — 2026-08-18
 - Native macOS menu bar (File/Edit/Help) with in-app Help window

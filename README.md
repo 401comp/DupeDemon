@@ -147,14 +147,11 @@ Build the app and DMG:
 chmod +x build.sh && ./build.sh
 ```
 
-**Homebrew is not required.** The build script looks for a
-[python.org](https://www.python.org/downloads/macos/) framework install of
-Python 3.9+ first (Homebrew is only used as a fallback if no python.org
-install is found), creates a venv, runs PyInstaller, and produces a
-drag-install DMG. It also checks the finished bundle with `otool` to confirm
-nothing inside it accidentally links back to `/opt/homebrew` or
-`/usr/local` — this is a portability check on the *output*, not a build
-requirement, and it fails loudly if the check finds a leak.
+The source build uses a [python.org](https://www.python.org/downloads/macos/)
+framework installation of Python 3.9+ and produces a drag-install DMG. It
+also checks the finished bundle with `otool` to confirm that nothing inside it
+links to an external non-system library. This is a portability check on the
+*output*, not a requirement for people installing the release.
 
 ## License
 
