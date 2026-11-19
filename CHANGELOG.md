@@ -1,5 +1,96 @@
 # Changelog
 
+## 1.19.2 — 2026-10-08
+
+- Added **Clear Folders** in the toolbar, **Clear Folder List** beside the
+  folder table, and File → Clear Folder List (⇧⌘R). It asks for confirmation,
+  removes only the configured scan entries, and clears stale results; it never
+  changes files on disk.
+- Removing selected folder rows now tells the user when nothing is selected
+  and confirms how many entries were removed.
+
+## 1.19.1 — 2026-10-08
+
+- The Compare window now launches substantially larger, using the available
+  desktop space so a whole duplicate group is visible instead of a cramped
+  two-column slice.
+- Exact-mode comparisons show the leading portion of the full SHA-256
+  fingerprint.  This makes it clear that differently named files in an exact
+  group are still byte-for-byte identical.
+
+## 1.19.0 — 2026-10-08
+
+- **Layout:** made the upper and lower action controls visually uniform: they
+  now share the same readable light control treatment, large type, and larger
+  click targets. The top toolbar now uses its available space too.
+
+## 1.18.9 — 2026-10-08
+
+- **Fix:** retained the native dark macOS interface after the first Aqua
+  readability repair changed the entire toolbar light. Enlarged bottom buttons
+  now use a dark foreground, so Aqua's occasional white button fallback stays
+  readable without changing the rest of the application theme.
+
+## 1.18.8 — 2026-10-08
+
+- **Fix:** macOS Aqua could override the enlarged action buttons with white
+  native controls while retaining light text. The app now uses ttk's
+  controllable `clam` theme with explicit readable colors for every action,
+  hover, pressed, and disabled state.
+
+## 1.18.7 — 2026-10-08
+
+- **Accessibility:** bottom action buttons now use the shell field as their
+  visual size reference: every action has the same substantial height and a
+  consistent width, rather than the compact native-button height.
+
+## 1.18.6 — 2026-10-08
+
+- **Layout:** bottom controls now fill the action strip's available height,
+  instead of sitting as small controls inside a large empty band.
+
+## 1.18.5 — 2026-10-08
+
+- **Accessibility:** enlarged the bottom action buttons, their click targets,
+  the keep-rule selector, selection readout, and shell field for easier
+  reading and use.
+
+## 1.18.4 — 2026-10-08
+
+- **Layout:** added extra padding around the bottom action strip so the
+  selection, move, delete, and shell controls have comfortable room from the
+  results area and bottom window edge.
+
+## 1.18.3 — 2026-10-08
+
+- **Accessibility:** replaced the faint blue scan notice with a bold black-on-
+  gold banner for substantially better contrast and readability.
+
+## 1.18.2 — 2026-10-08
+
+- Added an always-visible scan notice beneath the toolbar. It plainly says
+  that **Similar Images** scans pictures only, and explains that **Exact
+  duplicates** also checks standard documents, music, videos, archives, and
+  disk images by default.
+
+## 1.18.1 — 2026-10-08
+
+- **Fix:** **+ Add Folder…** now uses a real folder chooser and immediately
+  adds the selected folder. It no longer opens Finder and makes you drag the
+  folder back into Dupe Demon. Finder drag-and-drop remains available for
+  multi-folder additions.
+
+## 1.18.0 — 2026-10-08
+
+- Exact duplicate scans now include standard non-image files by default:
+  documents, audio, video, archives, and disk images. Matching remains
+  byte-for-byte, so a PDF or movie is never mistaken for a similar file.
+- Preferences adds an Exact-mode standard-file switch for an image-only scan
+  when desired, while the existing extension field remains available for
+  custom types.
+- Result and progress wording now says **files**, and non-image matches offer
+  Quick Look/Open instead of a broken thumbnail placeholder.
+
 ## 1.17.0 — 2026-09-22
 
 - Adding a main folder now lists its immediate child folders as independently

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Dupe Demon — duplicate photo finder for macOS
+Dupe Demon — duplicate photo and file finder for macOS
 =============================================
 A dupeGuru-style duplicate photo finder with a Tkinter GUI.
 
@@ -8,8 +8,8 @@ Features
 --------
 - Exact duplicate detection (file content hashing: size -> partial SHA-256 -> full SHA-256)
 - Similar image detection (perceptual difference-hash with adjustable threshold)
-- Preferences window (match mode, similarity threshold, hash size, min file size,
-  extensions, subfolders, hidden files, thumbnail size, worker threads) persisted to
+- Preferences window (match mode, file scope, similarity threshold, hash size,
+  min file size, extensions, subfolders, hidden files, thumbnail size) persisted to
   ~/Library/Application Support/DuplicatePhotoFinder/preferences.json
 - Thumbnail results grouped by duplicate set, with auto-select rules
   (keep newest / oldest / largest / smallest / highest resolution)
@@ -56,7 +56,7 @@ except ImportError:
     pass
 
 APP_NAME = "Dupe Demon"
-__version__ = "1.17.0"
+__version__ = "1.19.2"
 APP_SUPPORT_DIR = Path.home() / "Library" / "Application Support" / "DupeDemon"
 PREFS_FILE = APP_SUPPORT_DIR / "preferences.json"
 CACHE_FILE = APP_SUPPORT_DIR / "hash_cache.db"
@@ -162,6 +162,23 @@ DEFAULT_EXTENSIONS = ["jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif", "webp"]
 if HEIC_SUPPORTED:
     DEFAULT_EXTENSIONS += ["heic", "heif"]
 
+# Exact byte-for-byte matching does not need an image decoder, so there is no
+# reason to artificially limit it to photos. These are deliberately common
+# user files rather than every extension under the sun: cache/database/temp
+# files are noisy, while documents, media, and archives are the places where
+# duplicate storage usually accumulates.
+STANDARD_FILE_EXTENSIONS = [
+    # Documents and data
+    "pdf", "txt", "rtf", "csv", "tsv", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+    "odt", "ods", "odp", "pages", "numbers", "key",
+    # Audio
+    "mp3", "m4a", "aac", "wav", "aiff", "aif", "flac", "ogg", "wma",
+    # Video
+    "mp4", "m4v", "mov", "avi", "mkv", "webm", "mpg", "mpeg", "wmv",
+    # Archives and disk images
+    "zip", "7z", "rar", "tar", "gz", "bz2", "xz", "dmg", "iso",
+]
+
 PAIRWISE_LIMIT = 2500      # below this, compare every pair; above, use banding
 
 
@@ -225,6 +242,7 @@ class Preferences:
     follow_symlinks: bool = False
     min_file_size_kb: int = 1
     extensions: list = field(default_factory=lambda: list(DEFAULT_EXTENSIONS))
+    include_standard_files: bool = True   # Exact mode: documents, media, archives
     thumbnail_size: int = 128
     match_rotated: bool = False            # also match 90/180/270-degree rotations
     auto_select_after_scan: bool = True    # mark duplicates automatically, keep the best
@@ -389,7 +407,14 @@ def collect_files(folders, prefs: Preferences, cancel_event=None):
     Reference folder are marked is_reference=True and will never be deleted.
     Apple Photos library packages are always protected references, even when a
     parent folder was added as a Source."""
-    exts = {"." + e.lower().lstrip(".") for e in prefs.extensions}
+    # Similar mode needs decodable images. Exact mode hashes raw bytes and can
+    # safely include ordinary files as well. User-supplied extensions are
+    # always honoured; the standard set is an opt-out convenience, not a
+    # replacement for a custom list.
+    selected_extensions = list(prefs.extensions)
+    if prefs.match_mode == "exact" and prefs.include_standard_files:
+        selected_extensions += STANDARD_FILE_EXTENSIONS
+    exts = {"." + e.lower().lstrip(".") for e in selected_extensions}
     min_bytes = prefs.min_file_size_kb * 1024
     seen = set()
     files = []
@@ -819,7 +844,7 @@ def run_scan(folders, prefs, progress=None, status=None, cancel_event=None):
         status("Collecting files…")
     files = collect_files(folders, prefs, cancel_event)
     if status:
-        status(f"Analyzing {len(files)} images…")
+        status(f"Analyzing {len(files)} files…")
     cache = open_cache(prefs)
     try:
         if prefs.match_mode == "exact":
@@ -1131,6 +1156,19 @@ def build_gui():
                            "~90% also catches resized/re-saved copies.").grid(
                 row=row, column=1, columnspan=2, sticky="w"); row += 1
 
+            self.standard_files_var = tk.BooleanVar(value=prefs.include_standard_files)
+            self.standard_files_check = ttk.Checkbutton(
+                body,
+                text="In Exact mode, also scan standard files (documents, audio, video, archives)",
+                variable=self.standard_files_var)
+            self.standard_files_check.grid(
+                row=row, column=0, columnspan=3, sticky="w", pady=(6, 1)); row += 1
+            ttk.Label(body, foreground="gray", wraplength=460, justify="left", text=(
+                "Exact mode compares file contents, so it can safely find identical PDFs, "
+                "Office files, music, movies, ZIPs, and disk images. Similar-image mode "
+                "always scans images only.")).grid(
+                row=row, column=0, columnspan=3, sticky="w"); row += 1
+
             self.hash_var = tk.IntVar(value=prefs.hash_size)
             ttk.Label(body, text="Hash precision:").grid(row=row, column=0, sticky="w", pady=4)
             hash_frame = ttk.Frame(body)
@@ -1177,12 +1215,13 @@ def build_gui():
             ttk.Spinbox(body, from_=0, to=1_000_000, textvariable=self.minsize_var,
                         width=10).grid(row=row, column=1, sticky="w"); row += 1
 
-            ttk.Label(body, text="File types:").grid(row=row, column=0, sticky="w", pady=4)
+            ttk.Label(body, text="Image + custom types:").grid(row=row, column=0, sticky="w", pady=4)
             self.ext_var = tk.StringVar(value=", ".join(prefs.extensions))
             ttk.Entry(body, textvariable=self.ext_var, width=42).grid(
                 row=row, column=1, columnspan=2, sticky="we"); row += 1
-            heic_note = ("HEIC supported." if HEIC_SUPPORTED else
-                         "For HEIC support:  python3 -m pip install pillow-heif")
+            heic_note = (("HEIC supported. " if HEIC_SUPPORTED else
+                          "For HEIC support:  python3 -m pip install pillow-heif. ")
+                         + "Add other extensions here, separated by commas.")
             ttk.Label(body, text=heic_note, foreground="gray").grid(
                 row=row, column=1, columnspan=2, sticky="w"); row += 1
 
@@ -1285,6 +1324,11 @@ def build_gui():
             self.threshold_scale.state(["!disabled"] if similar else ["disabled"])
             for widget in (self.hash_fast, self.hash_precise, self.rotated_check):
                 widget.configure(state=state)
+            # Standard non-image files only make sense for a raw-content
+            # comparison. Keep the setting visible but prevent a confusing
+            # no-op toggle while Similar images is selected.
+            self.standard_files_check.configure(
+                state="disabled" if similar else "normal")
 
         def _restore_defaults(self):
             defaults = Preferences()
@@ -1298,6 +1342,7 @@ def build_gui():
             self.autoselect_var.set(defaults.auto_select_after_scan)
             self.minsize_var.set(str(defaults.min_file_size_kb))
             self.ext_var.set(", ".join(defaults.extensions))
+            self.standard_files_var.set(defaults.include_standard_files)
             self.thumb_var.set(defaults.thumbnail_size)
             self.cache_var.set(defaults.use_hash_cache)
             self.clear_on_exit_var.set(defaults.clear_cache_on_exit)
@@ -1321,6 +1366,7 @@ def build_gui():
             exts = [e.strip().lstrip(".").lower()
                     for e in self.ext_var.get().replace(";", ",").split(",")]
             p.extensions = [e for e in exts if e] or list(DEFAULT_EXTENSIONS)
+            p.include_standard_files = self.standard_files_var.get()
             p.thumbnail_size = self.thumb_var.get()
             p.use_hash_cache = self.cache_var.get()
             p.clear_cache_on_exit = self.clear_on_exit_var.get()
@@ -1370,8 +1416,8 @@ def build_gui():
             self.createcommand("tk::mac::ReopenApplication", self._reopen)
             self.createcommand("tk::mac::ShowPreferences", self.open_preferences)
             self.bind("<Command-comma>", lambda e: self.open_preferences())
-            self.bind("<Command-o>", lambda e: self.add_folder())
             self.bind("<Command-r>", lambda e: self.remove_folder())
+            self.bind("<Command-Shift-r>", lambda e: self.clear_folder_list())
             self.bind("<Command-Return>", lambda e: self.start_scan())
 
             self._build_menubar()
@@ -1395,10 +1441,10 @@ def build_gui():
             menubar = tk.Menu(self)
 
             file_menu = tk.Menu(menubar, tearoff=0)
-            file_menu.add_command(label="Add Folder…", accelerator="⌘O",
-                                 command=self.add_folder)
             file_menu.add_command(label="Remove from List", accelerator="⌘R",
                                  command=self.remove_folder)
+            file_menu.add_command(label="Clear Folder List", accelerator="⇧⌘R",
+                                 command=self.clear_folder_list)
             file_menu.add_separator()
             file_menu.add_command(label="Scan", accelerator="⌘↩",
                                  command=self.start_scan)
@@ -1535,8 +1581,8 @@ def build_gui():
 
             sections = [
                 ("Getting started",
-                 "Add folders with “+ Add Folder…” or by dragging them "
-                 "onto the folder list from Finder. Dupe Demon lists each "
+                 "Drag files or folders onto the folder list from Finder. "
+                 "Dupe Demon lists each "
                  "immediate child folder separately, so you can choose exactly "
                  "what to scan. Click Scan to search for duplicate or similar "
                  "photos."),
@@ -1825,22 +1871,40 @@ def build_gui():
 
         # ---------------- layout ----------------
         def _build_widgets(self):
+            # Keep the top and bottom action areas visually consistent. On
+            # macOS Aqua may force its own light button surface, so every one
+            # of these controls uses a dark foreground that remains readable
+            # on either the requested light gray or Aqua's white fallback.
+            def action_button(parent, text, command, *, width=None, state="normal"):
+                kwargs = dict(
+                    text=text, command=command, state=state,
+                    font=("Helvetica", 13, "bold"), padx=12, pady=7,
+                    borderwidth=1, relief="raised", foreground="#161616",
+                    activeforeground="#161616", disabledforeground="#666666",
+                    background="#e4e2df", activebackground="#d3d1ce",
+                    highlightthickness=0)
+                if width is not None:
+                    kwargs["width"] = width
+                return tk.Button(parent, **kwargs)
+
             toolbar = ttk.Frame(self, padding=(12, 10, 12, 6))
             toolbar.pack(fill="x")
-            ttk.Button(toolbar, text="＋ Add Folder…", command=self.add_folder).pack(side="left")
-            ttk.Button(toolbar, text="－ Remove from List", command=self.remove_folder).pack(
+            action_button(toolbar, "－ Remove from List", self.remove_folder, width=18).pack(
+                side="left")
+            action_button(toolbar, "Clear Folders", self.clear_folder_list, width=14).pack(
                 side="left", padx=(6, 0))
-            self.scan_btn = ttk.Button(toolbar, text="▶ Scan", command=self.start_scan)
+            self.scan_btn = action_button(toolbar, "▶ Scan", self.start_scan, width=12)
             self.scan_btn.pack(side="left", padx=(18, 0))
-            self.scan_selected_btn = ttk.Button(
-                toolbar, text="Scan Selected", command=lambda: self.start_scan(selected_only=True))
+            self.scan_selected_btn = action_button(
+                toolbar, "Scan Selected", lambda: self.start_scan(selected_only=True), width=14)
             self.scan_selected_btn.pack(side="left", padx=(6, 0))
-            self.stop_btn = ttk.Button(toolbar, text="■ Stop", command=self.stop_scan,
-                                       state="disabled")
+            self.stop_btn = action_button(toolbar, "■ Stop", self.stop_scan,
+                                          width=12, state="disabled")
             self.stop_btn.pack(side="left", padx=(6, 0))
-            ttk.Button(toolbar, text="Preferences…  (⌘,)",
-                       command=self.open_preferences).pack(side="right")
-            self.cache_btn = ttk.Button(toolbar, command=self.clear_cache_action)
+            action_button(toolbar, "Preferences…  (⌘,)", self.open_preferences,
+                          width=18).pack(side="right")
+            self.cache_btn = action_button(toolbar, "Clear Cache", self.clear_cache_action,
+                                           width=17)
             self.cache_btn.pack(side="right", padx=(0, 8))
             self.refresh_cache_button()
             self.mode_label = ttk.Label(toolbar, foreground="gray")
@@ -1856,6 +1920,20 @@ def build_gui():
                 text="Ready.",
                 width=46, anchor="w")
             self.status_label.pack(side="left", padx=(0, 0))
+
+            # Scan mode is consequential: Similar Images intentionally sees
+            # only pictures, while Exact duplicates can reclaim space from
+            # everyday files too. Keep that distinction in plain sight rather
+            # than making users infer it from a buried preference.
+            # Use a true high-contrast banner rather than a subtle accent
+            # color. ttk theme colors can be faint or ignored on macOS, which
+            # made the original blue text needlessly hard to read.
+            self.scan_scope_notice = tk.Label(
+                self, foreground="#111111", background="#FFD54A",
+                font=("", 12, "bold"), anchor="w", justify="left",
+                padx=14, pady=6, wraplength=1180)
+            self.scan_scope_notice.pack(fill="x")
+            self._refresh_mode_label()
 
             # 30/70 split: folders on the left, results on the right
             self.split = ttk.PanedWindow(self, orient="horizontal")
@@ -1891,7 +1969,7 @@ def build_gui():
 
             self._folder_placeholder = tk.Frame(tree_wrap, background="#1a1a1a")
             tk.Label(
-                self._folder_placeholder, text="Add folders here",
+                self._folder_placeholder, text="Drag files or folders here",
                 font=("Helvetica", 14), fg="#808080", bg="#1a1a1a",
             ).place(relx=0.5, rely=0.5, anchor="center")
             self._folder_placeholder.place(relx=0, rely=0, relwidth=1, relheight=1)
@@ -1900,6 +1978,8 @@ def build_gui():
             ftools.pack(fill="x", pady=(6, 0))
             ttk.Button(ftools, text="Toggle Source / Reference / Off",
                        command=self.toggle_folder_kind).pack(side="left")
+            ttk.Button(ftools, text="Clear Folder List",
+                       command=self.clear_folder_list).pack(side="left", padx=(6, 0))
             ttk.Label(
                 ftools, foreground="gray",
                 text="Child folders are individually selectable. Reference and Photos Library are protected."
@@ -1946,48 +2026,77 @@ def build_gui():
             self.after(0, self._set_initial_sash)
 
             # bottom action bar
-            actions = ttk.Frame(self, padding=(12, 4, 12, 12))
+            # Keep the file-action controls away from the window edge. The
+            # former tight strip made Delete, Move, and the shell field feel
+            # crowded against the bottom of the app.
+            actions = ttk.Frame(self, padding=(12, 8, 12, 12))
             actions.pack(fill="x")
-            ttk.Label(actions, text="Auto-select all except:").pack(side="left")
+            # These controls decide which files get moved or deleted, so give
+            # them larger type and click targets than the general UI.
+            style = ttk.Style(self)
+            style.configure("Bottom.TLabel", font=("", 13))
+            style.configure("Bottom.TCombobox", font=("", 13))
+            style.configure("Bottom.TEntry", font=("", 13))
+
+            # Use the same light, large button treatment as the top toolbar.
+            # The shell field remains the height reference for this strip.
+            def bottom_action_button(text, command):
+                return action_button(actions, text, command, width=18)
+
+            ttk.Label(actions, text="Auto-select all except:",
+                      style="Bottom.TLabel").pack(side="left", fill="y")
             initial_rule = (self.prefs.keep_rule
                             if self.prefs.keep_rule in KEEP_RULES else "Best quality")
             self.keep_var = tk.StringVar(value=initial_rule)
             keep_menu = ttk.Combobox(
                 actions, textvariable=self.keep_var, state="readonly", width=18,
+                style="Bottom.TCombobox",
                 values=list(KEEP_RULES))
-            keep_menu.pack(side="left", padx=(6, 4))
+            keep_menu.pack(side="left", fill="y", padx=(6, 4))
             keep_menu.bind("<<ComboboxSelected>>", self._keep_rule_changed)
-            ttk.Button(actions, text="Auto-Select", command=self.auto_select).pack(side="left")
-            ttk.Button(actions, text="Clear Selection", command=self.clear_selection).pack(
-                side="left", padx=(6, 0))
-            self.trash_btn = ttk.Button(actions, text="🗑 Delete",
-                                        command=self.trash_selected)
-            self.trash_btn.pack(side="right", padx=(0, 10))
-            self.move_btn = ttk.Button(actions, text="📦 Move Selected to…",
-                                       command=self.move_selected_to_folder)
-            self.move_btn.pack(side="right", padx=(0, 8))
+            bottom_action_button("Auto-Select", self.auto_select).pack(side="left", fill="y")
+            bottom_action_button("Clear Selection", self.clear_selection).pack(
+                side="left", fill="y", padx=(6, 0))
+            self.trash_btn = bottom_action_button("🗑 Delete", self.trash_selected)
+            self.trash_btn.pack(side="right", fill="y", padx=(0, 10))
+            self.move_btn = bottom_action_button("📦 Move Selected to…",
+                                                 self.move_selected_to_folder)
+            self.move_btn.pack(side="right", fill="y", padx=(0, 8))
             shell_frame = ttk.Frame(actions)
-            shell_frame.pack(side="right", padx=(0, 12))
-            ttk.Label(shell_frame, text="$").pack(side="left")
+            shell_frame.pack(side="right", fill="y", padx=(0, 12))
+            ttk.Label(shell_frame, text="$", style="Bottom.TLabel").pack(side="left", fill="y")
             self.shell_var = tk.StringVar()
             self.shell_entry = ttk.Entry(shell_frame, textvariable=self.shell_var,
-                                         width=26)
-            self.shell_entry.pack(side="left", padx=(4, 0))
+                                         width=26, style="Bottom.TEntry")
+            self.shell_entry.pack(side="left", fill="y", padx=(4, 0))
             self.shell_entry.bind("<Return>", self.run_shell_command)
             self._shell_placeholder = "enter shell commands…"
             self._shell_placeholder_on = False
             self.shell_entry.bind("<FocusIn>", self._shell_focus_in)
             self.shell_entry.bind("<FocusOut>", self._shell_focus_out)
             self._show_shell_placeholder()
-            self.selection_label = ttk.Label(actions, foreground="gray")
-            self.selection_label.pack(side="right", padx=(0, 14))
+            self.selection_label = ttk.Label(actions, foreground="gray",
+                                             style="Bottom.TLabel")
+            self.selection_label.pack(side="right", fill="y", padx=(0, 14))
 
         def _refresh_mode_label(self):
             if self.prefs.match_mode == "exact":
-                self.mode_label.config(text="Mode: Exact duplicates")
+                scope = "images + standard files" if self.prefs.include_standard_files else "images only"
+                self.mode_label.config(text=f"Mode: Exact duplicates ({scope})")
+                notice = (
+                    "Exact scan: checks pictures plus standard documents, music, videos, "
+                    "archives, and disk images — byte-for-byte."
+                    if self.prefs.include_standard_files else
+                    "Exact scan: images only. Enable standard files in Preferences to also "
+                    "check documents, music, videos, archives, and disk images.")
             else:
                 self.mode_label.config(
                     text=f"Mode: Similar images ≥ {self.prefs.similarity_threshold}%")
+                notice = (
+                    "Picture scan: Similar Images checks pictures only. For duplicate documents, "
+                    "music, videos, archives, and disk images, choose Exact duplicates in Preferences.")
+            if hasattr(self, "scan_scope_notice"):
+                self.scan_scope_notice.config(text=notice)
 
         def _on_mousewheel(self, event):
             self.canvas.yview_scroll(-1 * event.delta, "units")
@@ -2012,37 +2121,71 @@ def build_gui():
 
         # ---------------- folder management ----------------
         def add_folder(self):
-            # Tk's directory picker has no native multi-select on any
-            # platform — it can only return one folder per call. Finder's
-            # own window DOES support real Cmd/Shift-click multi-select, and
-            # this app already accepts multi-folder drops, so just open
-            # Finder there (same plain `open` pattern as reveal_in_finder /
-            # open_file elsewhere in this file) and let the user drag
-            # several folders onto the list at once. Forcing a window size
-            # via AppleScript `set bounds` doesn't reliably stick — Finder
-            # keeps using whatever size it last remembered — so don't fight
-            # it; a window the user already resized themselves is normal
-            # Finder behavior, not a bug.
+            """Choose and immediately add one folder.
+
+            Opening a Finder window and expecting the user to drag the same
+            folder back into the app made the button a non-button. The native
+            chooser returns the selected path directly; Finder drag-and-drop
+            remains the fast way to add several folders at once.
+            """
             if self.folders:
                 start = os.path.dirname(self.folders[-1]["path"])
             else:
                 pictures = str(Path.home() / "Pictures")
                 start = pictures if os.path.isdir(pictures) else str(Path.home())
-            subprocess.run(["open", start])
-            self.status_label.config(
-                text="Select one or more folders in the Finder window "
-                     "(⌘-click for multiple), then drag them onto the "
-                     "folder list on the left.")
+            selected = filedialog.askdirectory(
+                parent=self, title="Choose a folder to scan",
+                initialdir=start, mustexist=True)
+            if not selected:
+                return
+            selected = os.path.abspath(os.path.expanduser(selected))
+            if selected in self._folder_paths_set():
+                self.status_label.config(text="That folder is already in the list.")
+                return
+            count = self._add_folder_with_children(selected)
+            children = max(0, count - 1)
+            message = "Added folder."
+            if children:
+                message += (f" Listed {children} child folder"
+                            f"{'s' if children != 1 else ''} for individual selection.")
+            self.status_label.config(text=message)
 
         def remove_folder(self):
             selected = list(self.folder_list.selection())
             if not selected:
+                self.status_label.config(text="Select one or more folders to remove them.")
                 return
             self.folders = [e for e in self.folders if e["path"] not in selected]
             for path in selected:
                 if self.folder_list.exists(path):
                     self.folder_list.delete(path)
             self._update_folder_placeholder()
+            self.status_label.config(
+                text=f"Removed {len(selected)} folder{'s' if len(selected) != 1 else ''} from the list.")
+
+        def clear_folder_list(self):
+            """Remove every configured scan folder and its current results.
+
+            Folder rows only describe a scan setup; no files on disk are ever
+            changed here.  Clearing results as well prevents stale duplicate
+            cards from being mistaken for the newly empty setup.
+            """
+            count = len(self.folders)
+            if not count:
+                self.status_label.config(text="The folder list is already empty.")
+                return
+            if not messagebox.askyesno(
+                    APP_NAME,
+                    f"Remove all {count} folder{'s' if count != 1 else ''} from the scan list?\n\n"
+                    "This does not delete, move, or change any files.",
+                    parent=self):
+                return
+            self.folders.clear()
+            for path in self.folder_list.get_children():
+                self.folder_list.delete(path)
+            self._clear_results()
+            self._update_folder_placeholder()
+            self.status_label.config("Folder list cleared. Drag files or folders here when you're ready.")
 
         def _set_initial_sash(self):
             try:
@@ -2139,9 +2282,9 @@ def build_gui():
                 return
             self._clear_results()
             self._cancel_event.clear()
-            self.scan_btn.state(["disabled"])
-            self.scan_selected_btn.state(["disabled"])
-            self.stop_btn.state(["!disabled"])
+            self.scan_btn.configure(state="disabled")
+            self.scan_selected_btn.configure(state="disabled")
+            self.stop_btn.configure(state="normal")
             self.progress.config(value=0, maximum=100)
             self.status_label.config(text=skip_note or "Starting…")
             prefs_snapshot = Preferences(**asdict(self.prefs))
@@ -2180,7 +2323,7 @@ def build_gui():
                 # keep selection/trash consistent with what is actually shown
                 self.file_by_path = {f.path: f for g in self.groups for f in g}
                 self._preselect &= set(self.file_by_path)
-                self.stop_btn.state(["disabled"])
+                self.stop_btn.configure(state="disabled")
                 self.status_label.config(
                     text=f"Stopped — showing first {shown} of "
                          f"{self._groups_total} groups.")
@@ -2202,7 +2345,7 @@ def build_gui():
                     kind = msg[0]
                     if kind == "progress":
                         latest_progress = (msg[1], msg[2])
-                        latest_text = f"Analyzed {msg[1]} of {msg[2]} images…"
+                        latest_text = f"Analyzed {msg[1]} of {msg[2]} files…"
                     elif kind == "status":
                         latest_text = msg[1]
                     elif kind == "done":
@@ -2240,9 +2383,9 @@ def build_gui():
             self.after(60, self._poll_queue)
 
         def _scan_reset(self, text):
-            self.scan_btn.state(["!disabled"])
-            self.scan_selected_btn.state(["!disabled"])
-            self.stop_btn.state(["disabled"])
+            self.scan_btn.configure(state="normal")
+            self.scan_selected_btn.configure(state="normal")
+            self.stop_btn.configure(state="disabled")
             self.progress.config(value=0)
             self.status_label.config(text=text)
 
@@ -2252,12 +2395,12 @@ def build_gui():
             self.refresh_cache_button()
             dupe_count = sum(len(g) - 1 for g in groups)
             wasted = sum(sum(f.size for f in g[1:]) for g in groups)
-            status = (f"{n_files} images scanned — {len(groups)} groups, "
+            status = (f"{n_files} files scanned — {len(groups)} groups, "
                       f"{dupe_count} duplicates ({human_size(wasted)} reclaimable)")
             if not groups:
-                self.scan_btn.state(["!disabled"])
-                self.scan_selected_btn.state(["!disabled"])
-                self.stop_btn.state(["disabled"])
+                self.scan_btn.configure(state="normal")
+                self.scan_selected_btn.configure(state="normal")
+                self.stop_btn.configure(state="disabled")
                 # a finished scan keeps the pie full/green rather than
                 # resetting to empty, even when nothing was found
                 self.progress.config(maximum=100, value=100)
@@ -2269,9 +2412,9 @@ def build_gui():
             if self.prefs.auto_select_after_scan:
                 self._preselect = compute_auto_selection(groups, self.keep_var.get())
                 status += " — duplicates marked"
-            self.scan_btn.state(["!disabled"])
-            self.scan_selected_btn.state(["!disabled"])
-            self.stop_btn.state(["disabled"])
+            self.scan_btn.configure(state="normal")
+            self.scan_selected_btn.configure(state="normal")
+            self.stop_btn.configure(state="disabled")
             self._start_rendering(groups, status)
 
         def _sort_groups_inplace(self, groups):
@@ -2316,7 +2459,7 @@ def build_gui():
                 self.progress.config(maximum=max(self._groups_total, 1), value=0)
             self.status_label.config(
                 text=f"Processing 0 of {self._groups_total} groups…")
-            self.stop_btn.state(["!disabled"])
+            self.stop_btn.configure(state="normal")
             self._render_queue = page
             self._update_selection_label()
 
@@ -2340,7 +2483,7 @@ def build_gui():
             self.status_label.config(
                 text=f"Processing {self._rendered_count} of "
                      f"{self._groups_total} groups…")
-            self.stop_btn.state(["!disabled"])
+            self.stop_btn.configure(state="normal")
             self._render_queue = page
 
         # ---------------- results rendering ----------------
@@ -2435,6 +2578,9 @@ def build_gui():
                                        lambda e, p=fi.path: reveal_in_finder(p))
                         img_label.bind("<Button-3>",
                                        lambda e, p=fi.path: reveal_in_finder(p))
+                    else:
+                        ttk.Label(cell, text="File\n(no thumbnail)", justify="center",
+                                  foreground="gray").pack(pady=(18, 18))
                     is_ref = getattr(fi, "is_reference", False)
                     is_photos_item = getattr(fi, "photo_library_root", None) is not None
                     var = tk.BooleanVar(value=(not is_ref) and fi.path in self._preselect)
@@ -2493,7 +2639,7 @@ def build_gui():
                          f"groups shown — scroll for more")
             else:
                 self.status_label.config(text=self._summary_text)
-                self.stop_btn.state(["disabled"])
+                self.stop_btn.configure(state="disabled")
 
         def _make_thumbnail(self, path, size):
             try:
@@ -2538,6 +2684,10 @@ def build_gui():
             mtype = getattr(group, "match_type", "similar")
             conf_txt = ("100% (byte-identical)"
                         if mtype == "exact" else f"{sim:g}% match")
+            # Exact groups are only formed from a complete SHA-256 match.  Put
+            # the fingerprint in the comparison window too, so a differently
+            # named file does not look like a guess based on its filename.
+            exact_hash = _sha256(group[0].path) if mtype == "exact" else None
             win.title(f"Compare — Group {group_index} · {len(group)} files · {conf_txt}")
             keeper = pick_keeper(group, self.keep_var.get())
 
@@ -2599,7 +2749,7 @@ def build_gui():
                                  lambda e, p=fi.path: quick_look(p))
                     win._photo_refs.append(photo)
                 else:
-                    tk.Label(inner_cell, text="(preview failed)",
+                    tk.Label(inner_cell, text="File preview unavailable\nUse Quick Look or Open",
                              background="#111111", foreground="#dddddd"
                              ).place(relx=0.5, rely=0.5, anchor="center")
 
@@ -2621,6 +2771,8 @@ def build_gui():
                 meta = (f"Dims:  {dims}\n"
                         f"Size:  {human_size(fi.size)}\n"
                         f"Date:  {when}")
+                if exact_hash:
+                    meta += f"\nSHA-256:  {exact_hash[:16]}…"
                 ttk.Label(col, text=meta, justify="left",
                           foreground="gray30").pack(anchor="w", pady=(4, 2))
 
@@ -2649,13 +2801,19 @@ def build_gui():
             ttk.Button(footer, text="Close", command=win.destroy).pack(side="right")
             win.bind("<Escape>", lambda e: win.destroy())
 
-            # size window: fit content but cap to screen
+            # Start generously sized: the old request-sized window only showed
+            # about two cards even when there was ample desktop space for an
+            # entire duplicate group.  Users can still resize it afterward.
             win.update_idletasks()
-            req_w = min(win.winfo_reqwidth() + 24, screen_w - 80)
-            req_h = min(win.winfo_reqheight() + 24, screen_h - 120)
-            x = max(20, (screen_w - req_w) // 2)
-            y = max(30, (screen_h - req_h) // 2 - 20)
-            win.geometry(f"{req_w}x{req_h}+{x}+{y}")
+            available_w = screen_w - 60
+            available_h = screen_h - 90
+            group_w = len(group) * (per_w + gap) + 80
+            launch_w = min(available_w, max(1200, group_w))
+            launch_h = min(available_h, max(850, cell_h + 320))
+            win.minsize(min(900, available_w), min(650, available_h))
+            x = max(20, (screen_w - launch_w) // 2)
+            y = max(30, (screen_h - launch_h) // 2 - 20)
+            win.geometry(f"{launch_w}x{launch_h}+{x}+{y}")
             win.transient(self)
             win.lift()
             win.focus_set()
@@ -2739,8 +2897,8 @@ def build_gui():
             # main thread with one static "Moving files…" message for the
             # whole operation looked exactly like a hang for a large
             # selection. Run it in the background instead, like scanning.
-            self.trash_btn.state(["disabled"])
-            self.move_btn.state(["disabled"])
+            self.trash_btn.configure(state="disabled")
+            self.move_btn.configure(state="disabled")
             self.progress.config(maximum=len(selected), value=0)
             self.status_label.config(
                 text=f"Moving 0 of {len(selected)} files to Trash…")
@@ -2761,8 +2919,8 @@ def build_gui():
             threading.Thread(target=worker, daemon=True).start()
 
         def _trash_finished(self, trashed_paths):
-            self.trash_btn.state(["!disabled"])
-            self.move_btn.state(["!disabled"])
+            self.trash_btn.configure(state="normal")
+            self.move_btn.configure(state="normal")
             trashed = set(trashed_paths)
             total = sum(self.file_by_path[p].size for p in trashed_paths
                        if p in self.file_by_path)
@@ -2774,8 +2932,8 @@ def build_gui():
         def _trash_failed(self, error, trashed_so_far):
             applog.error(f"Trash operation failed: {error} "
                         f"({len(trashed_so_far)} file(s) trashed before failure)")
-            self.trash_btn.state(["!disabled"])
-            self.move_btn.state(["!disabled"])
+            self.trash_btn.configure(state="normal")
+            self.move_btn.configure(state="normal")
             # A partial-success re-render below uses track_progress=False
             # (it doesn't touch the pie), so without this the pie freezes
             # mid-spin at whatever partial value the last chunk left it at.
@@ -3040,15 +3198,30 @@ def selftest():
         noise_image(2).save(tmpdir / "unique1.png")
         gradient_image(shift=128).save(tmpdir / "unique2.png")
 
+        # Standard non-image files use the same content-hash engine. The
+        # extension is deliberately a common document type: no image decoder
+        # should be involved in finding this pair.
+        document = b"%PDF-1.4\nDuplicate document test payload\n%%EOF\n"
+        (tmpdir / "invoice.pdf").write_bytes(document)
+        (tmpdir / "sub" / "invoice copy.pdf").write_bytes(document)
+
         prefs = Preferences()
         prefs.min_file_size_kb = 0
 
         prefs.match_mode = "exact"
         groups, n = run_scan([str(tmpdir)], prefs)
-        assert n == 7, f"expected 7 files, saw {n}"
-        assert len(groups) == 1 and len(groups[0]) == 3, \
-            f"exact mode: expected one group of 3, got {[len(g) for g in groups]}"
-        print(f"  exact mode OK   — {n} files, 1 group of 3 identical copies")
+        sets = sorted(sorted(os.path.basename(f.path) for f in g) for g in groups)
+        assert n == 9, f"expected 9 files, saw {n}"
+        assert ["copy.png", "copy2.png", "original.png"] in sets, sets
+        assert ["invoice copy.pdf", "invoice.pdf"] in sets, sets
+        print(f"  exact mode OK   — {n} files, including an identical PDF pair")
+
+        prefs.include_standard_files = False
+        groups, n = run_scan([str(tmpdir)], prefs)
+        assert n == 7 and len(groups) == 1 and len(groups[0]) == 3, \
+            f"standard-file opt-out failed: {n} files, {[len(g) for g in groups]}"
+        print("  standard-file setting OK — opt-out returns to image-only exact scans")
+        prefs.include_standard_files = True
 
         prefs.match_mode = "similar"
         prefs.similarity_threshold = 90
@@ -3071,8 +3244,9 @@ def selftest():
 
         prefs.match_mode = "exact"
         groups, _ = run_scan([str(tmpdir)], prefs)
-        assert all(f.width == 320 and f.height == 240 for f in groups[0]), \
-            [(f.width, f.height) for f in groups[0]]
+        image_group = next(g for g in groups if any(f.path.endswith("original.png") for f in g))
+        assert all(f.width == 320 and f.height == 240 for f in image_group), \
+            [(f.width, f.height) for f in image_group]
         print("  exact-mode dimension fill OK")
         prefs.match_mode = "similar"
 

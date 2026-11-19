@@ -2,11 +2,11 @@
 
 <img src="assets/icon.png" width="128" align="right" alt="Dupe Demon icon">
 
-**A duplicate photo finder for macOS.** Dupe Demon hunts down exact and
+**A duplicate photo and file finder for macOS.** Dupe Demon hunts down exact and
 near-duplicate photos — resized, re-saved, re-compressed, even rotated copies —
 shows them side by side, marks the junk automatically, and keeps the best one.
 
-Version **1.13.3** · Python 3 / Tkinter / Pillow · macOS 10.13+
+Version **1.19.2** · Python 3 / Tkinter / Pillow · macOS 10.13+
 
 ## Install
 
@@ -36,7 +36,11 @@ Optional drag-and-drop from Finder: `python3 -m pip install tkinterdnd2`
   - *Similar images* — perceptual difference-hash; catches resized, re-encoded,
     edited, and (optionally) rotated copies
   - *Exact duplicates* — byte-for-byte content match (size → partial SHA-256 →
-    full SHA-256), fast on large libraries
+    full SHA-256), fast on large libraries; checks images plus standard documents,
+    audio, video, archives, and disk images by default
+- **Plain-language scan notice** — a high-contrast gold banner always states
+  whether the current mode is picture-only or includes standard files, and
+  tells you where to switch modes
 - **Source / Reference / Off folders** — mark each folder as **Source** (files
   can be deleted), **Reference** (files are protected, never deleted), or
   **Off** (excluded from scans entirely). Double-click a row to cycle.
@@ -44,10 +48,9 @@ Optional drag-and-drop from Finder: `python3 -m pip install tkinterdnd2`
   automatically, including when found inside a broader Pictures scan. Their
   managed originals are audit-only: they are never auto-selected, moved, or
   trashed. Matching external copies can still be selected safely.
-- **Drag & drop** — drop folders (or files, whose parent folder is added)
-  from Finder onto the folder list. "+ Add Folder…" opens a Finder window
-  for this too — select several folders at once with ⌘-click and drag them
-  all in (Tk's picker can only choose one folder per dialog)
+- **Add Folder + drag & drop** — **+ Add Folder…** opens a real folder chooser
+  and immediately adds the folder you select. Drag folders (or files, whose
+  parent folder is added) from Finder onto the list when you want to add several.
 - **Child-folder chooser** — adding a main folder such as `~/Pictures` lists
   its immediate child folders as independent rows. Select the rows you want
   and use **Scan Selected**, or scan the complete listed set; individual rows
@@ -87,13 +90,14 @@ Stored in `~/Library/Application Support/DupeDemon/preferences.json`.
 | Setting | What it does |
 |---|---|
 | Scan type | Similar images (perceptual) or Exact duplicates (byte-for-byte) |
+| Standard files in Exact mode | Includes common documents, audio, video, archives, and disk images; turn off for image-only exact scans |
 | Similarity threshold | 70–100 %. Higher = stricter; ~90 % catches resized/re-compressed copies |
 | Hash precision | Fast 64-bit vs. Precise 256-bit perceptual hash |
 | Match rotated copies | Also detects 90°/180°/270° rotations |
 | Auto-mark after scan | Pre-selects everything except the best copy per group (default on) |
 | Subfolders / hidden files / symlinks | Controls the folder walk |
 | Minimum file size | Skip icons and thumbnails |
-| File types | Comma-separated extension list |
+| Image + custom types | Comma-separated extensions; use this to add a type not in the standard Exact-mode set |
 | Thumbnail size | Display tuning |
 | Use hash cache | Persists hashes so re-scans skip unchanged files; Clear Cache button included |
 | Clear cache on exit | Wipes the hash cache when the app closes (default on) |
